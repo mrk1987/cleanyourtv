@@ -44,6 +44,8 @@ final class CameraTile {
     private final GradientDrawable ring;
     private ExoPlayer player;
     private boolean started;
+    /** A picture has arrived, and the rows have not scrolled up under the tile. */
+    private boolean hasPicture, scrolledAway;
 
     /** The tile added to root, or null when no camera is configured. */
     static CameraTile attach(Context context, FrameLayout root) {
@@ -106,10 +108,27 @@ final class CameraTile {
 
     void stop() {
         started = false;
+        hasPicture = false;
         handler.removeCallbacks(retry);
         release();
-        frame.setFocusable(false);
-        frame.setVisibility(View.INVISIBLE);
+        updateShown();
+    }
+
+    /**
+     * The grid scrolled away from the dock: the tile sits on top of the rows that scroll up under it (a
+     * SurfaceView ignores the grid's clipping), so it hides until the grid is back at the top. The stream keeps
+     * running, so the picture is back at once.
+     */
+    void setScrolledAway(boolean away) {
+        if (away == scrolledAway) return;
+        scrolledAway = away;
+        updateShown();
+    }
+
+    private void updateShown() {
+        boolean show = hasPicture && !scrolledAway;
+        frame.setVisibility(show ? View.VISIBLE : View.INVISIBLE);
+        frame.setFocusable(show);
     }
 
     private void applyVolume() {
@@ -129,8 +148,8 @@ final class CameraTile {
             @Override
             public void onRenderedFirstFrame() {
                 Log.i(TAG, "first frame");
-                frame.setVisibility(View.VISIBLE);
-                frame.setFocusable(true);
+                hasPicture = true;
+                updateShown();
             }
 
             @Override

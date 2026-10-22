@@ -46,6 +46,19 @@
         <item>org.droidtv.nettvrecommender</item>
         <item>org.droidtv.demome</item>
         <item>org.droidtv.eum</item>
+        <item>com.gameloft.android.HEP.GloftANHP</item>  <!-- Asphalt preload -->
+        <!-- Philips NetTV web apps (labels from examples/philips-65pus8102) -->
+        <item>org.droidtv.nettvapp1814</item>      <!-- ARTE -->
+        <item>org.droidtv.nettvapp1984</item>      <!-- Dailymotion -->
+        <item>org.droidtv.nettvapp20004410</item>  <!-- Couchplay Games -->
+        <item>org.droidtv.nettvapp20004412</item>  <!-- Blockbuster Nordic -->
+        <item>org.droidtv.nettvapp4649</item>      <!-- SF Anytime -->
+        <item>org.droidtv.nettvapp4655</item>      <!-- Deezer -->
+        <item>org.droidtv.nettvapp4932</item>
+        <item>org.droidtv.nettvapp5225</item>      <!-- Filmbox Live -->
+        <item>org.droidtv.nettvapp5251</item>      <!-- Min Bio -->
+        <item>org.droidtv.nettvapp5326</item>      <!-- Toon Goggles -->
+        <item>org.droidtv.nettvapp5512</item>      <!-- Fishing TV -->
     </string-array>
 
     <!-- The TV's Live TV / tuner app, offered at the end of the Inputs menu. Leave empty to omit. -->

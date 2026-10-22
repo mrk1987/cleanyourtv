@@ -552,6 +552,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
+                if (camera != null) camera.setScrolledAway(rv.computeVerticalScrollOffset() > 0);
                 if (!glassShown) return;
                 glassTargetY -= dy;
                 glassScrollShift -= dy;
