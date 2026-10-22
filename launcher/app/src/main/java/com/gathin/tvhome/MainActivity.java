@@ -677,6 +677,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             // stay put rather than letting the focus finder jump across the screen.
             camera.view().setOnKeyListener((v, keyCode, event) -> {
                 if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                boolean ok = keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
+                        || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER;
+                if (camera.isFull()) {
+                    // Full screen: OK or Back puts the tile back; the arrows stay with it, so focus cannot wander
+                    // to tiles hidden behind the picture.
+                    if (ok || keyCode == KeyEvent.KEYCODE_BACK) {
+                        if (event.getRepeatCount() == 0) camera.setFull(false);
+                        return true;
+                    }
+                    return keyCode == KeyEvent.KEYCODE_DPAD_UP || keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+                            || keyCode == KeyEvent.KEYCODE_DPAD_LEFT || keyCode == KeyEvent.KEYCODE_DPAD_RIGHT;
+                }
+                if (ok) {
+                    if (event.getRepeatCount() == 0) camera.setFull(true);
+                    return true;
+                }
                 switch (keyCode) {
                     case KeyEvent.KEYCODE_DPAD_UP:
                         btnSettings.requestFocus();
@@ -802,6 +818,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        // Home over the full-screen camera puts it back as a tile. The remote's Home button can arrive as a HOME
+        // intent or, through HomeKeyService's app_keys, as an ordinary launch of this app, so any new intent does.
+        if (camera != null) camera.setFull(false);
         if (openLauncherSettingsIfAsked(intent)) return;
         if (openInputsIfAsked(intent)) return;
         if (intent == null || !intent.hasCategory(Intent.CATEGORY_HOME)) return;

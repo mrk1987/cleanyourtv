@@ -46,6 +46,9 @@ final class CameraTile {
     private boolean started;
     /** A picture has arrived, and the rows have not scrolled up under the tile. */
     private boolean hasPicture, scrolledAway;
+    /** OK on the tile fills the screen with it; OK, Back or Home puts it back (the small size is kept here). */
+    private boolean full;
+    private int smallWidth, smallHeight, smallTop, smallEnd;
 
     /** The tile added to root, or null when no camera is configured. */
     static CameraTile attach(Context context, FrameLayout root) {
@@ -103,10 +106,48 @@ final class CameraTile {
     void fitAbove(int bottomPx) {
         float density = context.getResources().getDisplayMetrics().density;
         FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) frame.getLayoutParams();
-        int h = Math.max(Math.round(90 * density), Math.min(Math.round(180 * density), bottomPx - lp.topMargin));
+        int top = full ? smallTop : lp.topMargin;
+        int h = Math.max(Math.round(90 * density), Math.min(Math.round(180 * density), bottomPx - top));
+        if (full) {
+            smallHeight = h;
+            smallWidth = h * 16 / 9;
+            return;
+        }
         if (lp.height == h) return;
         lp.height = h;
         lp.width = h * 16 / 9;
+        frame.setLayoutParams(lp);
+    }
+
+    boolean isFull() {
+        return full;
+    }
+
+    /** Fills the screen with the live view, or puts it back where it was. */
+    void setFull(boolean on) {
+        if (on == full) return;
+        full = on;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) frame.getLayoutParams();
+        if (on) {
+            smallWidth = lp.width;
+            smallHeight = lp.height;
+            smallTop = lp.topMargin;
+            smallEnd = lp.getMarginEnd();
+            lp.width = FrameLayout.LayoutParams.MATCH_PARENT;
+            lp.height = FrameLayout.LayoutParams.MATCH_PARENT;
+            lp.topMargin = 0;
+            lp.setMarginEnd(0);
+            frame.setClipToOutline(false);
+            frame.setForeground(null);
+            frame.bringToFront();
+        } else {
+            lp.width = smallWidth;
+            lp.height = smallHeight;
+            lp.topMargin = smallTop;
+            lp.setMarginEnd(smallEnd);
+            frame.setClipToOutline(true);
+            frame.setForeground(frame.hasFocus() ? ring : null);
+        }
         frame.setLayoutParams(lp);
     }
 
@@ -123,6 +164,7 @@ final class CameraTile {
     void stop() {
         started = false;
         hasPicture = false;
+        setFull(false);
         handler.removeCallbacks(retry);
         release();
         updateShown();
