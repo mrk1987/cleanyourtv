@@ -36,7 +36,6 @@
         <!-- Replaced by SmartTube; stays enabled so casting from the iPhone YouTube app keeps working. -->
         <item>com.google.android.youtube.tv</item>
         <!-- Preloads hidden instead of disabled: disabling packages boot-looped this TV (2026-10-21). -->
-        <item>com.amazon.amazonvideo.livingroom</item>
         <item>org.droidtv.amazonalexa</item>
         <item>com.google.android.videos</item>
         <item>com.google.android.music</item>
