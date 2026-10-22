@@ -103,6 +103,7 @@ is ignored, and a file that doesn't parse is ignored as a whole, so a theme can 
 | `dock_glass` | bool | The dock band as light frosted glass like the top bar's pills (`false` by default); suits `sky_intensity` or a wallpaper, where the solid band reads as a dark slab |
 | `ambient_glow` | bool | The glow behind the dock in the focused app's colour (`true` by default); `false` keeps only `background_color` or the wallpaper, e.g. for a calm photo background |
 | `app_glow` | bool | The focus highlight glows in the focused app's colour on every tile, as `cinematic_home` does for the dock (`false` by default) |
+| `aurora` | bool | A moving aurora behind Home: curtains that dance, fold and shimmer, drifting at random every 4 to 10 minutes between quiet green, high red, violet-blue, pink-edged and yellow kinds. Runs at 20 frames a second only while Home shows (about a quarter of one core on a 2017 MediaTek TV), still with `animations` off (`false` by default) |
 
 ## Wallpapers
 
