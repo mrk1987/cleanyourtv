@@ -334,6 +334,11 @@
     <!-- The focus highlight glows in the focused app's colour on every tile, as the cinematic shelf does for the
          dock, without cinematic_home. Can also be set with "app_glow": true in a theme's config.json. -->
     <bool name="app_glow">false</bool>
+    <!-- A moving aurora behind Home (AuroraView): curtains that dance, fold, shimmer and slowly reshape, drifting at random every
+         4 to 10 minutes between quiet green, high red, violet-blue, pink-edged and yellow kinds. It moves only while
+         Home shows, at 20 frames a second, and stands still with animations off. Best with ambient_glow off and no
+         wallpaper. Can also be set with "aurora": true in a theme's config.json. -->
+    <bool name="aurora">false</bool>
     <!-- Minutes Home may sit untouched before it shows the clock screensaver (ClockActivity); 0 turns it off.
          Unlike the system screensaver this never starts over live TV or an app, which matters on TVs whose
          Live TV window does not keep the screen on (CVTE): there the system screensaver would start in the
