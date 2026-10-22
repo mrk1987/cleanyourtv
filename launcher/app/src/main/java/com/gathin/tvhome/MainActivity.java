@@ -135,6 +135,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private WallpaperPlayer wallpaperPlayer;
     private GlassView glass;
     private View ambient;
+    /** The RTSP camera view under the top buttons; null when camera_rtsp_url is empty. */
+    private CameraTile camera;
     private TextView heroName;
     /** The top shelf: heroName, plus the cinematic shelf's "Last opened" line and dock position dots. */
     private View hero;
@@ -379,6 +381,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
         root = findViewById(R.id.root);
         root.setBackgroundColor(cfg.backgroundColor);
+        camera = CameraTile.attach(this, root);
         // root fills the window with an opaque colour (Config keeps background_color opaque), so the window's own
         // black under it is a second full-screen fill on every frame for nothing. The starting window still uses
         // the theme's background, so launch looks the same.
@@ -645,6 +648,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
             if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return true;
             if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) {
+                // Settings sits right above the camera tile: Down goes into it while it shows a picture.
+                if (v.getId() == R.id.btnSettings && camera != null && camera.isShowing()) {
+                    camera.view().requestFocus();
+                    return true;
+                }
                 // Back to the dock tile Up came from, not wherever the focus finder lands.
                 focusTile(lastFocused % COLUMNS);
                 return true;
@@ -658,6 +666,34 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         btnInputs.setOnKeyListener(pillKeys);
         btnWifi.setOnKeyListener(pillKeys);
         btnSettings.setOnKeyListener(pillKeys);
+        if (camera != null) {
+            // The camera tile: Up to Settings above it, Down to the dock's last app below it; Left and Right
+            // stay put rather than letting the focus finder jump across the screen.
+            camera.view().setOnKeyListener((v, keyCode, event) -> {
+                if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+                switch (keyCode) {
+                    case KeyEvent.KEYCODE_DPAD_UP:
+                        btnSettings.requestFocus();
+                        return true;
+                    case KeyEvent.KEYCODE_DPAD_DOWN:
+                        focusTile(Math.max(0, adapter.dockFilled() - 1));
+                        return true;
+                    case KeyEvent.KEYCODE_DPAD_LEFT:
+                    case KeyEvent.KEYCODE_DPAD_RIGHT:
+                        return true;
+                    default:
+                        return false;
+                }
+            });
+            View.OnFocusChangeListener ring = camera.view().getOnFocusChangeListener();
+            camera.view().setOnFocusChangeListener((v, hasFocus) -> {
+                ring.onFocusChange(v, hasFocus);
+                if (hasFocus) {
+                    hideGlass();
+                    hideHero();
+                }
+            });
+        }
         btnReorder.setOnKeyListener(pillKeys);
         btnLibraryTop.setOnKeyListener(pillKeys);
         if (advancedEffects) {
@@ -787,6 +823,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
         updateClockVisibility();
         tileRefresh.onStart();
+        if (camera != null) camera.start();
     }
 
     @Override
@@ -1024,6 +1061,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     protected void onStop() {
         super.onStop();
         started = false;
+        if (camera != null) camera.stop();
         unregisterReceiver(timeReceiver);
         handler.removeCallbacks(clockCheck);
         stopped = true;

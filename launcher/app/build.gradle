@@ -13,6 +13,13 @@ android {
         targetSdk 34
         versionCode 7
         versionName '2.6'
+
+        // Camera tile (CameraTile): the RTSP URL, credentials included, comes from local.properties
+        // (camera.rtsp.url=rtsp://user:pass@host:554/stream2), which git ignores. Unset leaves the tile out.
+        def localProps = new Properties()
+        def localFile = rootProject.file('local.properties')
+        if (localFile.exists()) localFile.withInputStream { localProps.load(it) }
+        resValue 'string', 'camera_rtsp_url', localProps.getProperty('camera.rtsp.url', '')
     }
 
     buildTypes {
@@ -43,6 +50,9 @@ android {
 dependencies {
     implementation 'androidx.recyclerview:recyclerview:1.3.2'
     implementation 'androidx.dynamicanimation:dynamicanimation:1.0.0'
+    // Camera tile: RTSP playback (CameraTile).
+    implementation 'androidx.media3:media3-exoplayer:1.4.1'
+    implementation 'androidx.media3:media3-exoplayer-rtsp:1.4.1'
     // Test only (never in the APK): plain JVM tests for the module card validators, src/test.
     testImplementation 'junit:junit:4.13.2'
 }
