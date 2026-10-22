@@ -96,6 +96,20 @@ final class CameraTile {
         play();
     }
 
+    /**
+     * Shrinks the tile, keeping 16:9, so it ends above {@code bottomPx} (window coordinates), for layouts whose dock
+     * sits higher (more columns, rows under the dock). Never larger than 320x180 dp, never smaller than 160x90 dp.
+     */
+    void fitAbove(int bottomPx) {
+        float density = context.getResources().getDisplayMetrics().density;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) frame.getLayoutParams();
+        int h = Math.max(Math.round(90 * density), Math.min(Math.round(180 * density), bottomPx - lp.topMargin));
+        if (lp.height == h) return;
+        lp.height = h;
+        lp.width = h * 16 / 9;
+        frame.setLayoutParams(lp);
+    }
+
     /** The focusable tile, for the activity's key handling. */
     View view() {
         return frame;
@@ -115,9 +129,9 @@ final class CameraTile {
     }
 
     /**
-     * The grid scrolled away from the dock: the tile sits on top of the rows that scroll up under it (a
-     * SurfaceView ignores the grid's clipping), so it hides until the grid is back at the top. The stream keeps
-     * running, so the picture is back at once.
+     * A grid row has the focus, so the rows have scrolled up under the tile (a SurfaceView ignores the grid's
+     * clipping): it hides until the dock has the focus again. The grid's scroll offset is no guide, since it is not
+     * zero at rest in every layout. The stream keeps running, so the picture is back at once.
      */
     void setScrolledAway(boolean away) {
         if (away == scrolledAway) return;

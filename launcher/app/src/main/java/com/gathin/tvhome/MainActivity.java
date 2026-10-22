@@ -554,7 +554,6 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         grid.addOnScrollListener(new RecyclerView.OnScrollListener() {
             @Override
             public void onScrolled(@NonNull RecyclerView rv, int dx, int dy) {
-                if (camera != null) camera.setScrolledAway(rv.computeVerticalScrollOffset() > 0);
                 if (!glassShown) return;
                 glassTargetY -= dy;
                 glassScrollShift -= dy;
@@ -1595,6 +1594,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     // ---- top shelf -------------------------------------------------------------------------------
 
     private void showHero(int position, float dockTopInRoot) {
+        if (camera != null) {
+            // The dock is in view: the camera tile shows, sized to end above the dock wherever the layout puts it.
+            camera.setScrolledAway(false);
+            camera.fitAbove(Math.round(dockTopInRoot - 28 * density));
+        }
         String label = adapter.labelAt(position);
         int color = adapter.ambientColorAt(position);
         float y = dockTopInRoot - 14 * density - 26 * density - hero.getHeight();
@@ -1857,6 +1861,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      * name above the dock does not show (every grid tile has its name underneath).
      */
     private void showGlowOnly(int position) {
+        // A grid row has the focus, so the rows have scrolled up under the camera tile (a SurfaceView ignores the
+        // grid's clipping): hide it until the dock has the focus again.
+        if (camera != null) camera.setScrolledAway(true);
         int color = adapter.ambientColorAt(position);
         stopAmbientAnimation();
         hero.animate().cancel();
