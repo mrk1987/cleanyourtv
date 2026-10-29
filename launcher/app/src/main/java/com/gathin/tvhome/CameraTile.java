@@ -171,9 +171,9 @@ final class CameraTile {
     }
 
     /**
-     * A grid row has the focus, so the rows have scrolled up under the tile (a SurfaceView ignores the grid's
-     * clipping): it hides until the dock has the focus again. The grid's scroll offset is no guide, since it is not
-     * zero at rest in every layout. The stream keeps running, so the picture is back at once.
+     * The third or a later row has focus, so the grid scrolls into the tile's space (a SurfaceView ignores the
+     * grid's clipping). It returns on either of the first two rows. The stream keeps running, so the picture is
+     * back at once.
      */
     void setScrolledAway(boolean away) {
         if (away == scrolledAway) return;

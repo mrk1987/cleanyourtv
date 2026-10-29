@@ -2146,9 +2146,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      * name above the dock does not show (every grid tile has its name underneath).
      */
     private void showGlowOnly(int position) {
-        // A grid row has the focus, so the rows have scrolled up under the camera tile (a SurfaceView ignores the
-        // grid's clipping): hide it until the dock has the focus again.
-        if (camera != null) camera.setScrolledAway(true);
+        // The second row fits below the dock without scrolling the camera off screen. Hide the SurfaceView
+        // only from the third row onward, where the grid scrolls up into the camera's space.
+        if (camera != null) camera.setScrolledAway(!singleRow && position >= 2 * COLUMNS);
         int color = adapter.ambientColorAt(position);
         stopAmbientAnimation();
         hero.animate().cancel();
