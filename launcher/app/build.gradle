@@ -11,8 +11,8 @@ android {
         applicationId providers.gradleProperty('launcherApplicationId').getOrElse('com.gathin.tvhome')
         minSdk 26
         targetSdk 34
-        versionCode 7
-        versionName '2.6'
+        versionCode 11
+        versionName '3.2'
 
         // Camera tile (CameraTile): the RTSP URL, credentials included, comes from local.properties
         // (camera.rtsp.url=rtsp://user:pass@host:554/stream2), which git ignores. Unset leaves the tile out.
