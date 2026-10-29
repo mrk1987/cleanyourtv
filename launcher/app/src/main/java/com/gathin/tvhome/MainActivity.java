@@ -1840,6 +1840,19 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             // Below the dock (or in a plain grid) the glow follows the tile without the big name; letting it
             // fade out left the grid on plain black.
             showGlowOnly(position);
+            // Returning from row three must also restore the dock's resting position; otherwise the camera
+            // reappears over the still-scrolled dock. Both first rows fit on screen in the camera layout.
+            if (camera != null && dockRow && !singleRow && position < 2 * COLUMNS) {
+                View dock = grid.getLayoutManager().findViewByPosition(0);
+                if (dock != null) {
+                    int dy = dock.getTop() - (int) (6 * density) - grid.getPaddingTop();
+                    if (Math.abs(dy) > (int) (8 * density)) {
+                        grid.stopScroll();
+                        grid.scrollBy(0, dy);
+                    }
+                }
+                return;
+            }
             // Scroll just enough so the whole glass (not only the tile) is visible.
             revealRect.set(0, -(int) pad * 2, item.getWidth(), item.getHeight() + (int) pad);
             grid.requestChildRectangleOnScreen(item, revealRect, reducedMotion);
