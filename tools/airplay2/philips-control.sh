@@ -152,10 +152,30 @@ stop)
     done
     echo 'Test receiver stopped.'
     ;;
+recover)
+    # For a PulseAudio that is alive but answers no client (deadlocked in the sink). Keeps the end of the
+    # logs that a start would truncate, then restarts the whole runtime. Calibration files are not touched.
+    echo "$(date '+%m-%d %H:%M:%S') recovering the test runtime."
+    for name in pulse receiver; do
+        if [ -f "$ROOT/run/$name.log" ]; then
+            "$BB" tail -c 262144 "$ROOT/run/$name.log" >"$ROOT/run/$name-before-recovery.log"
+        fi
+    done
+    sh "$SELF" stop
+    sh "$SELF" start
+    ;;
 status)
     for name in pulse dbus avahi nqptp receiver watcher; do
-        if alive "$name"; then echo "$name: running"; else echo "$name: stopped"; fi
+        if ! alive "$name"; then
+            echo "$name: stopped"
+        elif [ "$name" = pulse ] && ! "$BB" timeout -s KILL 5 env LD_LIBRARY_PATH="$PULSE/lib:$PULSE/lib/pulseaudio" \
+                PULSE_SERVER="unix:$ROOT/run/pulse/native" PULSE_COOKIE="$ROOT/run/pulse/cookie" \
+                "$PULSE/bin/pactl" info >/dev/null 2>&1; then
+            echo "pulse: running but not answering (hung); use: recover"
+        else
+            echo "$name: running"
+        fi
     done
     ;;
-*) echo "Usage: $SELF start|status|stop|restart-receiver|start-watcher"; exit 2;;
+*) echo "Usage: $SELF start|status|stop|recover|restart-receiver|start-watcher"; exit 2;;
 esac

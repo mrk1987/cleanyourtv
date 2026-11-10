@@ -16,6 +16,29 @@ stream; timestamps advanced again and Shairport playback statistics resumed.
 The wake watcher is now deployed/running. Its seven shell-loop tests pass; a new
 physical standby/wake cycle has not yet been confirmed with the watcher active.
 
+Update 2026-11-10. The receiver had been silent since 2026-11-05 23:44: PulseAudio
+deadlocked while the watcher recreated the sink (main, `aaudio-sink` and `AudioTrack`
+threads all in a futex wait). The process stayed alive, its socket refused clients,
+and every later wake logged "recovery failed". Twelve earlier recreations had worked.
+The deadlock itself is not fixed; it is in the sink or the timing bridge. Changes:
+
+- The watcher now starts `airplay2-control.sh recover` (new: keep the log tails,
+  stop, start) when three attempts fail. Tested live with PulseAudio frozen by
+  SIGSTOP: the runtime was back about a minute after wake.
+- `pactl` exits 0 on SIGTERM/SIGINT, so a timed-out call used to count as success.
+  The timeouts now send SIGKILL.
+- `status` probes PulseAudio and reports "running but not answering (hung)".
+- Watcher log lines carry a timestamp.
+- A normal standby/wake cycle with the watcher active is confirmed
+  (KEYCODE_SLEEP / KEYCODE_WAKEUP over ADB, stream recreated on the first attempt).
+- Boot start, at the owner's request: `philips-boot-start.sh`, installed as
+  `/data/adb/service.d/90-airplay2.sh`. Verified across one reboot (runtime up 75 s
+  after boot). This replaces the earlier "no boot hooks" rule; delete that file to
+  go back to manual starts.
+- Not changed: avahi runs with `--debug` and logs a hostname conflict with Android's
+  own responder (`Android.local`) continuously, about 8 MB in nine days. Calibration
+  files were not touched.
+
 Goal: use Shairport Sync for audio reception on the rooted Philips Android TV and
 the Windows PC. Use the rooted JBL as a working behavior reference. The owner's
 iPhone can select the HomePod and JBL together; adding each new receiver to that

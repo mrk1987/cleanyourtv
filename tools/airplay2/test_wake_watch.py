@@ -3,6 +3,7 @@ from pathlib import Path
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -20,7 +21,11 @@ class WakeWatchChecks(unittest.TestCase):
             scripts = {
                 "id": "#!/bin/sh\nprintf '0\\n'\n",
                 "busybox": '''#!/bin/sh
-if [ "$1" = timeout ]; then shift 2; fi
+if [ "$1" = timeout ]; then
+  shift
+  if [ "$1" = -s ]; then shift 2; fi
+  shift
+fi
 exec "$@"
 ''',
                 "dumpsys": '''#!/bin/sh
@@ -36,6 +41,10 @@ if [ "$1" = 5 ]; then
   n=$(wc -l <"$TEST_RECOVERY_DIR/states")
   if [ "$i" -ge "$n" ]; then kill -TERM "$PPID"; fi
 fi
+''',
+                "setsid": '#!/bin/sh\nexec "$@"\n',
+                "control": '''#!/bin/sh
+echo "$1" >>"$TEST_RECOVERY_DIR/recoveries"
 ''',
                 "pactl": '''#!/bin/sh
 printf '%s %s %s\n' "$1" "$2" "$3" >>"$TEST_RECOVERY_DIR/actions"
@@ -56,10 +65,17 @@ fi
                      "AIRPLAY_RUNTIME_ROOT": str(root), "AIRPLAY_PULSE_ROOT": str(root),
                      "AIRPLAY_BUSYBOX": str(root / "bin/busybox"),
                      "AIRPLAY_DUMPSYS": str(root / "bin/dumpsys"),
+                     "AIRPLAY_CONTROL": str(root / "bin/control"),
                      "TEST_RECOVERY_DIR": str(root), "TEST_FAILED_RESUMES": str(failed_resumes)},
                 capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             actions = (root / "actions").read_text().splitlines() if (root / "actions").exists() else []
+            if "restarting the test runtime" in result.stdout:
+                deadline = time.monotonic() + 5  # the restart runs detached from the watcher
+                while not (root / "recoveries").exists() and time.monotonic() < deadline:
+                    time.sleep(0.05)
+            self.recoveries = ((root / "recoveries").read_text().splitlines()
+                               if (root / "recoveries").exists() else [])
             return actions, result.stdout
 
     def test_no_recovery_for_ordinary_awake_polling(self):
@@ -88,6 +104,11 @@ fi
         actions, output = self.run_watch([("Awake", 100)] + [("Awake", 200)] * 10, 10)
         self.assertEqual(len(actions), 6)
         self.assertIn("failed after three attempts", output)
+        self.assertEqual(self.recoveries, ["recover"])
+
+    def test_successful_recovery_does_not_restart_the_runtime(self):
+        self.run_watch([("Awake", 100), ("Asleep", 100)] + [("Awake", 200)] * 6, 1)
+        self.assertEqual(self.recoveries, [])
 
 
 if __name__ == "__main__":
