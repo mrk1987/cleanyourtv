@@ -2,7 +2,7 @@
 """One place for the project's add-ons, themes and switches: what each is, its screenshot, what is on the TV,
 and installing, updating or removing it the way its creator wrote it down. Nothing is downloaded: everything comes
 from this checkout of the repo, and every install runs the creator's own script (an add-on's install.sh or
-build-and-install.sh, or the steps in addons/README.md; tools/theme.sh for themes).
+build-and-install.sh, or the steps in addons/README.md; tools/theme.sh or theme.ps1 for themes).
 
     tools/venv/bin/python -I tools/manage.py list [addons|themes|switches]
     tools/venv/bin/python -I tools/manage.py show <add-on, theme or switch>
@@ -11,28 +11,54 @@ build-and-install.sh, or the steps in addons/README.md; tools/theme.sh for theme
     TV_HOST=<tv ip> tools/venv/bin/python -I tools/manage.py remove <add-on>
     TV_HOST=<tv ip> tools/venv/bin/python -I tools/manage.py set <switch> <json value> --theme <your theme folder>
 
-install on an installed add-on updates it (pm install -r). set writes the key into a theme folder of your own and
-pushes it with tools/theme.sh, as themes/README.md describes; it never edits a folder in this checkout, so pointing
+install on an installed add-on updates it (pm install -r). show prints every picture a switch's row carries in
+docs/switches.md, since a few keys have two (the pill up and at rest for `vpn_pill`), and a reader who copies
+only the first path would see half of what the page documents. set writes the key into a theme folder of your own and
+pushes it with the platform's theme script, as themes/README.md describes; it never edits a folder in this checkout, so pointing
 --theme at the project's themes/ or examples/ is refused before anything is written. set reads the value the way
 the key's own type in the Keys table needs - true or false for a bool, a JSON list, object or number where the
 table says so, the text itself for a string - and refuses one the launcher would ignore or a number outside the
-range the table states. A theme's config.json is hand-edited, so one that cannot be read, is not JSON, or is not a
-JSON object is named before the key is written, and a write it cannot make says so instead of ending in a traceback.
+range the table states. A list of keycodes is read the same way one entry at a time, because the launcher's
+intArray() answers a list holding a word or a number under 1 with the built-in default instead of the list.
+A string whose row names the values it takes (glow_style, glass_style, wallpaper_order, clock_format) is held to
+them, since the launcher answers any other value with its own default. A colour a row gives as `#RRGGBB` is held
+to the shape its own parser reads - six hex digits, and no background alpha, which Config.color() overwrites - so
+a malformed colour is refused rather than written as one the theme already had. A list of app_keys is read one entry at a
+time the way the launcher reads it: a key that is a keycode or a KEYCODE_ name and a target that is a package, an
+activity, an action word, input:, guide: or inputs, since RemoteKeys skips an entry it cannot read without a word
+and that button would open nothing. A theme's config.json is hand-edited, so one
+that cannot be read, is not JSON, or is not a JSON object is named before the key is written, and a write it cannot
+make says so instead of ending in a traceback.
 set's own arguments are read first: a switch without a value, a --theme without the folder behind it, and a word
 left over are answered with the usage line and exit 2 before a theme folder is read or written. list, status,
 show, install and remove read their own words the same way, before anything is read from this checkout or asked
-of the TV.
+of the TV. install then reads the add-on's entry: extra arguments are passed to its custom installer, but an
+add-on without one takes only its name and refuses extra arguments before anything is built, pushed or installed.
+A --theme folder that is not there is refused by name, not made: set starts a config.json in a folder
+of your own that exists, and the push it ends with replaces the theme on the TV and empties that theme's
+wallpapers, so a mistyped path would leave a one-key theme behind.
+
+On Windows, theme install and set use PowerShell (pwsh, or powershell when pwsh is not on PATH), without loading
+profiles or changing execution policy. Add-ons with their own shell installer still need Bash; an install whose bash
+or Gradle wrapper cannot start says which and what to install, and exits 1 before anything is built or pushed. A theme install
+takes only its name; script arguments belong to add-ons. If set saves the local file but the push fails, it
+reports that separately: the TV may have received only part of the theme.
 
 Exit status: 0 the command ran, 1 a command on the TV or a script this checkout runs failed, 2 the command line
 asked for something this script does not do - a command it does not have, or a word the command would drop - which
-is answered before the READMEs are read or the TV is asked anything.
+is answered before a script is started or the TV is asked anything. 2 is also a run that ends with nothing asked of
+the TV: no TV_HOST, a checkout with no tools/venv, and a TV tools/tv.py answered 2 for because it never reached it
+(a refused port, a Wireless debugging port that answers TLS, an address with no route to it). check.py answers the
+first two of those with 2 as well, and b64push.py the second.
 """
 import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -65,6 +91,21 @@ def img_src(cell):
     return m.group(1) if m else None
 
 
+def img_srcs(cell):
+    """Every <img src> in a cell, in the order the page draws them.
+
+    docs/switches.md lets one row show more than one picture - `vpn_pill` carries the pill up and the pill at
+    rest - and tests/test_switches.py already reads every one of them. A reader that stops at the first `<img
+    src>` reports half of what the page gives the key, which is what `show` did while the page grew a second
+    picture per row. A picture with no src keeps its place as an empty string, as that page's own reader has it.
+    """
+    out = []
+    for tag in re.findall(r"<img\b[^>]*>", cell or ""):
+        m = re.search(r'\bsrc="([^"]*)"', tag)
+        out.append(m.group(1) if m else "")
+    return out
+
+
 def plain(cell):
     """A Markdown cell as text: links to their words, code marks dropped."""
     s = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", cell or "")
@@ -95,7 +136,9 @@ def package(folder):
         f = folder / "app" / name
         if f.is_file():
             m = re.search(r"applicationId\s*=?\s*['\"]([^'\"]+)['\"]", f.read_text(encoding="utf-8"))
-            if m:
+            # The id goes into `pm uninstall` on the TV's shell, so only a package-shaped name
+            # (the shape disable.sh's PKG_RE accepts) counts; anything else reads as no package.
+            if m and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+", m.group(1)):
                 return m.group(1)
     return None
 
@@ -128,15 +171,17 @@ def switches(root=ROOT):
     sw = root / "docs" / "switches.md"
     if sw.is_file():
         for c in table_rows(sw.read_text(encoding="utf-8"), "| Key |"):
-            src = img_src(c[1]) if len(c) > 1 else None
-            if src:
+            srcs = [str((sw.parent / s).resolve()) for s in img_srcs(c[1]) if s] if len(c) > 1 else []
+            if srcs:
                 for k in re.findall(r"`([a-z_]+)`", c[0]):
-                    shots[k] = str((sw.parent / src).resolve())
+                    shots[k] = srcs
     out = []
     for c in table_rows(keys_part, "| Key |"):
         for k in re.findall(r"`([a-z_]+)`", c[0]):
+            pictures = shots.get(k, [])
             out.append({"kind": "switch", "name": k, "id": k, "type": plain(c[1]) if len(c) > 1 else "",
-                        "what": plain(c[2]) if len(c) > 2 else "", "screenshot": shots.get(k)})
+                        "what": plain(c[2]) if len(c) > 2 else "",
+                        "screenshot": pictures[0] if pictures else None, "screenshots": pictures})
     return out
 
 
@@ -149,6 +194,11 @@ def find(name, root=ROOT):
 
 
 # ---------------------------------------------------------------- a switch's value
+
+# The Keys-table cell of a colour a theme names: `background_color` and `accent_color`. Its two readers are
+# parsers of their own rather than Config.string(), which is why a value can be a String and still be dropped.
+COLOUR_CELL = "#RRGGBB"
+
 
 def declared_kind(item):
     """How the launcher reads a switch, from the type column of the Keys table in themes/README.md.
@@ -168,6 +218,8 @@ def declared_kind(item):
         return "list"
     if cell == "object":
         return "object"
+    if cell == COLOUR_CELL:
+        return "colour"
     if declared_range(cell) != (None, None):
         return "number"
     return "string" if cell else None
@@ -201,6 +253,196 @@ def number_in_range(key, item, parsed, text):
     return value
 
 
+# The Keys-table cell of a list the launcher reads with intArray() - `[83, 176]` for the remote buttons those
+# keys add. A list with anything else in it is answered with the built-in default, not the list.
+KEYCODES = "list of keycodes"
+
+
+def keycode_problem(values):
+    """The first entry intArray() would throw the whole list away for, or None.
+
+    intArray() is `if (!(item instanceof Number)) return fallback; ... if (out[i] < 1) return fallback;`, so one
+    entry that is a word, or a number under 1, gives the launcher config.xml's array instead of the list: the
+    remote buttons the key was meant to add do nothing while set has already reported the list as written.
+    Number.intValue() truncates, so a fraction is read as the whole number below it rather than dropped.
+    """
+    for entry in values:
+        if isinstance(entry, bool) or not isinstance(entry, (int, float)):
+            return f"{entry!r} is not a number"
+        if isinstance(entry, float) and not math.isfinite(entry):
+            return f"{entry} is not a finite number"
+        if entry != int(entry):
+            return f"{entry} is not a whole number (the launcher reads it as {int(entry)})"
+        if int(entry) < 1:
+            return f"{int(entry)} is below 1"
+    return None
+
+
+# The Keys table's only `list of strings` row. Config.stringList() drops the one entry it cannot read and keeps the
+# rest, so a list of package names survives a wrong entry; app_keys does not, because RemoteKeys.parseAppKeys() and
+# parseAppScancodes() read each entry themselves and skip one they cannot: a key that is neither a number nor a
+# KEYCODE_ name, a keycode of 0, a scancode that is not a number, no colon, no target, or a target launch() has no
+# way to open. Nothing on the TV says which button went dead, so such a list reads as written and half works.
+APP_KEYS = "list of strings"
+
+# RemoteKeys.java's own shapes: NUMERIC_KEY = Pattern.compile("[0-9]{1,6}"), KEYCODE_KEY =
+# Pattern.compile("KEYCODE_[A-Z0-9_]+"), `if (code > 0) keys.put(...)`, and the ten words isAction() answers. A key
+# listed twice is the launcher's documented last-one-wins rule, so a repeat is left alone: config.xml and a theme
+# both hand over the whole list, and the entry that wins is the one the owner wrote last.
+APP_KEY_NUMBER = re.compile(r"[0-9]{1,6}")
+APP_KEY_NAME = re.compile(r"KEYCODE_[A-Z0-9_]+")
+APP_KEY_WORDS = ("back", "home", "recents", "mute", "sleep", "screensaver", "settings", "wifi", "library", "ignore")
+PACKAGE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+")
+
+
+def app_key_problem(entry):
+    """The first thing the launcher would skip this app_keys entry for, or None."""
+    if not isinstance(entry, str):
+        return f"{entry!r} is not a string, so stringList() drops it"
+    text = entry.strip()
+    if not text:
+        return "an empty entry, which stringList() drops"
+    for prefix in ("hold:", "front:"):
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+            break
+    if ":" not in text:
+        return f"{entry!r} has no colon, so RemoteKeys finds no key in it"
+    if text.startswith("scan:"):
+        parts = text.split(":", 2)
+        if len(parts) != 3 or not parts[2].strip():
+            return f"{entry!r} names a scancode but nothing it opens"
+        code, target, label = parts[1].strip(), parts[2].strip(), "scancode"
+    else:
+        key, _, rest = text.partition(":")
+        code, target, label = key.strip(), rest.strip(), "keycode"
+        if not target:
+            return f"{entry!r} names a keycode but nothing it opens"
+    if not APP_KEY_NUMBER.fullmatch(code):
+        if label == "scancode":
+            return f"{entry!r}: {code!r} is not a scancode, which is a number"
+        if not APP_KEY_NAME.fullmatch(code):
+            return (f"{entry!r}: {code!r} is not a key the launcher reads, which is a keycode (190) or a "
+                    f"KEYCODE_ name (KEYCODE_BUTTON_3)")
+    elif int(code) < 1:
+        return f"{entry!r}: {label} 0 is not a button the launcher reads, which keeps only a key above 0"
+    return app_key_target_problem(entry, target)
+
+
+def app_key_target_problem(entry, target):
+    """Why launch() would open nothing for this target, or None.
+
+    launch() reads a target as an action word (isAction()'s ten), the input switcher ("inputs"), an input
+    ("input:<input id>"), a program guide ("guide:<package>"), an activity ("package/.Activity") or a package; a
+    target that is none of those - "youtube" without its dots, "guide:" with no package - finds no launch intent
+    and does nothing. A package name always has a dot, which is how isAction() tells a word from an app.
+    """
+    if target in APP_KEY_WORDS or target == "inputs":
+        return None
+    if target.startswith("input:"):
+        if target[len("input:"):].strip():
+            return None
+        return f"{entry!r}: input: names no input id"
+    if target.startswith("guide:"):
+        package = target[len("guide:"):].strip()
+        if PACKAGE_NAME.fullmatch(package):
+            return None
+        return f"{entry!r}: guide: takes the Live TV app's package (guide:com.tcl.tv), not {package!r}"
+    package, slash, activity = target.partition("/")
+    if slash and not activity.strip():
+        return f"{entry!r}: {target!r} names no activity after the slash"
+    if PACKAGE_NAME.fullmatch(package.strip()):
+        return None
+    words = ", ".join(APP_KEY_WORDS)
+    return (f"{entry!r}: {target!r} is nothing the launcher opens - a package name has a dot "
+            f"(com.google.android.youtube.tv), and the words are {words}, inputs, input:<input id> and "
+            f"guide:<package>")
+
+
+def app_keys_problem(values):
+    """The first entry parseAppKeys()/parseAppScancodes() would skip, or None."""
+    for entry in values:
+        problem = app_key_problem(entry)
+        if problem:
+            return problem
+    return None
+
+
+# The string keys a Keys-table row names the values of, with the one the launcher answers instead and whether its
+# reader ignores case. Config.glowStyle() is `GLOW_HORIZON.equalsIgnoreCase(value.trim()) ? GLOW_HORIZON :
+# GLOW_RADIAL` and glassStyle() answers glass to anything else; WallpaperRotation.validOrder() is
+# `ORDER_SEQUENTIAL.equals(order) || ORDER_SHUFFLE.equals(order)`, so `Sequential` is shuffle; ClockFormat applies
+# "12" or "24" and lets every other mode follow the TV, which is what `system` means, so a capital in SYSTEM is the
+# same mode. A value outside these sets is not an error on the TV - the default comes back - so set would report a
+# switch it left where it was, the dead `"glow_style": "off"` #3429 removed from two themes.
+ENUMS = {
+    "glow_style": (("radial", "horizon"), "radial", True),
+    "glass_style": (("glass", "rim", "halo"), "glass", True),
+    "clock_format": (("12", "24", "system"), "system", True),
+    "wallpaper_order": (("shuffle", "sequential"), "shuffle", False),
+}
+
+
+def enum_value(key, value):
+    """The string as the key's own reader keeps it, or a refusal naming the values it takes.
+
+    The launcher trims every string it reads (`string()`, `v instanceof String ? ((String) v).trim() : fallback`),
+    so the value written is the trimmed one. A key with no closed set - a name, a festival, a locale - is handed
+    back untouched, and so is a number written for a string key (`set greeting_name 42` is the text 42).
+    """
+    rule = ENUMS.get(key)
+    if rule is None:
+        return value
+    values, fallback, ignores_case = rule
+    trimmed = value.strip()
+    kept = trimmed.lower() if ignores_case else trimmed
+    if kept not in values:
+        allowed = ", ".join(values[:-1]) + " or " + values[-1]
+        sys.exit(f"{key} takes {allowed}, so {value!r} is not one the launcher keeps: it answers "
+                 f"{fallback} instead, and the theme would change nothing. Nothing was written or pushed.")
+    return trimmed
+
+
+def colour_value(key, text):
+    """The colour as the key's own reader keeps it, or a refusal naming what that reader does with it.
+
+    A `#RRGGBB` key is a String, so the type check above passes anything; it is the parser behind the key that
+    decides. Neither parser throws, so a value it cannot read is the colour the theme already had, and set
+    would report a key that changes nothing on the TV - the same dead value #3429 removed from two shipped
+    themes and ENUMS refuses for the four string keys.
+
+    Config.color() is `Color.parseColor(((String) v).trim()) | 0xFF000000` inside a try whose catch keeps the
+    built-in black, so `#12345` is dropped and the alpha of an `#AARRGGBB` is overwritten rather than shown.
+    Festival.parseColor() is `if (!t.matches("#[0-9A-Fa-f]{6}")) return 0;`: accent_color reads six hex digits
+    and nothing else, and 0 means the skin's own accent (diya gold, pumpkin for halloween).
+
+    A value with no '#' is handed back for Color.parseColor()'s own table of names (black, red, ...), which
+    set does not carry: accent_color refuses it because Festival.parseColor() reads no name at all.
+    """
+    value = text.strip()
+    digits = value[1:] if value.startswith("#") else None
+    if key == "accent_color":
+        if digits is None or not re.fullmatch(r"[0-9A-Fa-f]{6}", digits):
+            sys.exit(f"accent_color takes {COLOUR_CELL}, so {text!r} is not one the launcher keeps: "
+                     f"Festival.parseColor() reads six hex digits after the '#' and answers every other value "
+                     f"with the skin's own accent colour, so the theme would show no change. "
+                     f"Nothing was written or pushed.")
+        return value
+    # background_color, the other half of the cell: Config.color() and Color.parseColor().
+    if digits is None:
+        return value
+    if not re.fullmatch(r"[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8}", digits):
+        sys.exit(f"background_color takes {COLOUR_CELL}, so {text!r} is not one the launcher keeps: "
+                 f"Color.parseColor() cannot read it and Config.color() keeps the colour the theme already had, "
+                 f"so the theme would show no change. Nothing was written or pushed.")
+    if len(digits) == 8 and digits[:2].upper() != "FF":
+        shown = "#FF" + digits[2:].upper()
+        sys.exit(f"background_color takes {COLOUR_CELL}, and Config.color() makes every colour opaque, so the "
+                 f"alpha in {text!r} would be overwritten: the TV would show {shown}. Nothing was written or "
+                 f"pushed.")
+    return value
+
+
 def value_as(key, item, text):
     """The argument read the way the key's type needs, or a refusal naming what the key takes."""
     kind = declared_kind(item)
@@ -210,13 +452,15 @@ def value_as(key, item, text):
         if text.strip().lower() not in ("true", "false"):
             sys.exit(f"{key} is a bool, so pass true or false, not {text}")
         return text.strip().lower() == "true"
+    if kind == "colour":
+        return colour_value(key, text)
     if kind in (None, "string"):
         try:
             parsed = json.loads(text)
         except ValueError:
-            return text
+            return enum_value(key, text)
         # A string key is read as a String only, so `set greeting_name 42` means the text 42, not a number.
-        return parsed if isinstance(parsed, str) else text
+        return enum_value(key, parsed if isinstance(parsed, str) else text)
     try:
         parsed = json.loads(text)
     except ValueError:
@@ -228,6 +472,20 @@ def value_as(key, item, text):
         sys.exit(f"{key} takes {item.get('type')}, so pass {example}, not {text}")
     if kind == "number":
         return number_in_range(key, item, parsed, text)
+    if (item.get("type") or "").strip() == KEYCODES:
+        problem = keycode_problem(parsed)
+        if problem:
+            sys.exit(f"{key} takes {KEYCODES}, so every entry has to be a whole number of at least 1: {problem}, "
+                     f"and the launcher ignores the whole list when one entry is not, so those remote buttons "
+                     f"would do nothing. Nothing was written or pushed.")
+    if (item.get("type") or "").strip() == APP_KEYS:
+        problem = app_keys_problem(parsed)
+        if problem:
+            sys.exit(f"{key} takes {APP_KEYS} the launcher reads, and this list has an entry it would skip: "
+                     f"{problem}. RemoteKeys drops such an entry without a word, so that button would open "
+                     f"nothing while the theme says it is set. Nothing was written or pushed.")
+        # stringList() trims every entry it keeps, so the file holds what the TV reads.
+        return [entry.strip() for entry in parsed or []]
     return parsed
 
 
@@ -254,7 +512,8 @@ def json_kind(value):
 
 
 def own_folder_problem(folder):
-    """Why set may not write into `folder`, or None: it is one of the folders this checkout ships, or a file."""
+    """Why set may not write into `folder`, or None: it is one of the folders this checkout ships, a file, or
+    not there at all."""
     for name in PROJECT_FOLDERS:
         project = ROOT / name
         if folder == project or project in folder.parents:
@@ -262,6 +521,21 @@ def own_folder_problem(folder):
                     f"so copy one somewhere else first. Nothing was written or pushed.")
     if folder.exists() and not folder.is_dir():
         return f"{folder} is a file, not a folder: --theme takes a theme folder of your own."
+    if not folder.exists():
+        # A path with a file in the middle of it cannot be made at all, which is not a typo to point at the
+        # folder for: name the file that is in the way, as the write used to.
+        for parent in folder.parents:
+            if parent.exists() and not parent.is_dir():
+                return f"cannot write {folder / 'config.json'}: {parent} is a file, not a folder. Nothing was pushed."
+        # mkdir(parents=True) used to make whatever a typo named, write one key into it and push it: the push
+        # replaces the theme on the TV and empties the wallpapers/ collection it pushed last time, so a
+        # mistyped path left a one-key theme on a TV whose theme and pictures were gone. A folder of their own
+        # that exists is still started (no config.json yet is fine); a path that is not there is not.
+        return (f"{folder} is not there: --theme takes a theme folder of your own, and set writes into one that "
+                f"exists - an empty folder is fine, it starts the config.json. A path that is not there is "
+                f"usually a typo, and the push set ends with replaces the theme on the TV and empties its "
+                f"wallpapers, so a mistyped path would leave a one-key theme there. "
+                f"Nothing was written or pushed.")
     return None
 
 
@@ -293,20 +567,55 @@ def theme_config(folder):
 
 # ---------------------------------------------------------------- the TV
 
+def platform_usage(text):
+    if sys.platform == "win32":
+        return text.replace("TV_HOST=<tv ip> ", "$env:TV_HOST = '<tv ip>'; ").replace(
+            "tools/venv/bin/python -I tools/manage.py",
+            r".\tools\venv\Scripts\python.exe -I .\tools\manage.py")
+    return text
+
+
 def tv_python():
     for p in (TOOLS / "venv" / "bin" / "python", TOOLS / "venv" / "Scripts" / "python.exe"):
         if p.is_file():
             return str(p)
-    sys.exit("run: python3 -m venv tools/venv && tools/venv/bin/pip install -r tools/requirements.txt")
+    # Nothing reached the TV: this checkout has no tools/venv, so tools/tv.py cannot even be imported by a
+    # Python that has adb_shell. sys.exit(str) answers 1, which the docstring keeps for a command on the TV
+    # or a script of this checkout that failed, so a clone with no venv read as an install or a removal that
+    # ran and failed - and status/install/remove would have changed nothing either way. b64push.py answers
+    # this shape, and check.py the same and the one below, with 2.
+    if sys.platform == "win32":
+        run = (r"run: python -m venv tools\venv; "
+               r".\tools\venv\Scripts\python.exe -m pip install -r tools\requirements.txt")
+    else:
+        run = "run: python3 -m venv tools/venv && tools/venv/bin/pip install -r tools/requirements.txt"
+    sys.stderr.write(f"cannot load tools/tv.py (tools/venv is not there).\n{run}\nNothing was asked of the TV.\n")
+    raise SystemExit(2)
 
 
 def tv(command):
     if not os.environ.get("TV_HOST"):
-        sys.exit("set TV_HOST to the TV IP address")
+        # The same two lines tools/tv.py prints for this, and the status check.py answers it with: without
+        # TV_HOST there is no TV to ask anything, which is not the same as a command that failed on one.
+        if sys.platform == "win32":
+            sys.stderr.write("set $env:TV_HOST to the TV IP address\n")
+        else:
+            sys.stderr.write("set TV_HOST to the TV IP address, e.g.  TV_HOST=192.168.1.50 tools/tv.py --probe\n"
+                             "(find it under Settings → Network, or look for the TV in `arp -a`)\n")
+        sys.stderr.write("Nothing was asked of the TV.\n")
+        raise SystemExit(2)
     r = subprocess.run([tv_python(), "-I", str(TOOLS / "tv.py"), command], capture_output=True, text=True)
     # A failed read is unknown, not empty: never report "not installed" for a TV that didn't answer.
     if r.returncode:
-        sys.exit(r.stderr.strip() or r.stdout.strip() or f"tv.py exited with status {r.returncode}")
+        sys.stderr.write((r.stderr.strip() or r.stdout.strip()
+                          or f"tv.py exited with status {r.returncode}") + "\n")
+        # tools/tv.py answers 2 for a TV it never reached (a refused port, a Wireless debugging port that answers
+        # TLS, an address with no route to it, a Mac that was never granted Local Network) and 1 for a command the
+        # TV ran and failed; a status it does not document, from a crash of its own, is a command that failed too.
+        # Flattened to 1, a set that was asleep read as a status/install/remove that ran and failed, which is the
+        # one thing the reader of this status has to tell apart: install and remove change the TV, so "nothing was
+        # asked of it" cannot look like "the TV refused it".
+        raise SystemExit(2 if r.returncode == 2 else 1)
     return r.stdout
 
 
@@ -319,15 +628,54 @@ def run(cmd, cwd):
     return subprocess.run(cmd, cwd=cwd).returncode
 
 
+def theme_command(folder):
+    if sys.platform == "win32":
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            sys.exit("PowerShell was not found: put pwsh or powershell on PATH. Nothing was written or pushed.")
+        return [shell, "-NoProfile", "-NonInteractive", "-File", str(TOOLS / "theme.ps1"), "-Theme", str(folder)]
+    return ["bash", str(TOOLS / "theme.sh"), str(folder)]
+
+
+def push_theme(command):
+    try:
+        return run(command, ROOT)
+    except OSError as e:
+        sys.stderr.write(f"cannot start {command[0]}: {reason(e)}. Nothing was pushed.\n")
+        return 1
+
+
+def cannot_start(program, error, fix):
+    """A build or installer that never started: nothing ran, so name the program, why, and what to do."""
+    sys.stderr.write(f"cannot start {program}: {reason(error)}. {fix} Nothing was built, pushed or installed.\n")
+    return 1
+
+
 def install_addon(item, extra):
     folder = ROOT / "addons" / item["id"]
     if item["script"]:
         # The creator's own script, as their README says to run it.
-        return run(["bash", str(folder / item["script"])] + extra, ROOT)
+        try:
+            return run(["bash", str(folder / item["script"])] + extra, ROOT)
+        except OSError as e:
+            where = ("on Windows, install Git for Windows (it brings Git Bash) or WSL"
+                     if sys.platform == "win32" else "install it with your package manager")
+            return cannot_start("bash", e, f"{item['id']}'s installer is {item['script']}, a Bash script: "
+                                           f"{where}, and put bash on PATH.")
+    if extra:
+        sys.stderr.write(f"{item['id']} has no custom installer, so install takes only its name, "
+                         f"not {' '.join(extra)!r}: {USAGE_LINES['install']}. "
+                         "Nothing was built, pushed or installed.\n")
+        return 2
     # No script: the steps addons/README.md gives for every add-on.
     # Windows resolves a relative program against this process's directory, not cwd, so give the full path.
     gradlew = str(folder / "gradlew.bat") if os.name == "nt" else "./gradlew"
-    code = run([gradlew, "assembleRelease"], folder)
+    try:
+        code = run([gradlew, "assembleRelease"], folder)
+    except OSError as e:
+        return cannot_start(gradlew, e, f"{item['id']} builds with the Gradle wrapper in addons/{item['id']}/, "
+                                        f"so restore it from this checkout (git checkout -- addons/{item['id']}) "
+                                        f"and make sure it is executable.")
     if code:
         return code
     apk = folder / "app" / "build" / "outputs" / "apk" / "release" / "app-release.apk"
@@ -337,7 +685,12 @@ def install_addon(item, extra):
         return code
     out = tv("pm install -r /data/local/tmp/addon.apk; rm -f /data/local/tmp/addon.apk")
     print(out.strip())
-    return 0 if "Success" in out else 1
+    return 0 if pm_succeeded(out) else 1
+
+
+def pm_succeeded(out):
+    """pm printed its own Success line; a Failure line that names a package containing the word is not one."""
+    return "Success" in (line.strip() for line in out.splitlines())
 
 
 # ---------------------------------------------------------------- commands
@@ -366,16 +719,30 @@ def cmd_show(name):
     item = find(name)
     if not item:
         sys.exit(f"no add-on, theme or switch called {name}")
-    for k in ("kind", "name", "what", "type", "author", "tested", "permissions", "package", "screenshot"):
+    for k in ("kind", "name", "what", "type", "author", "tested", "permissions", "package"):
         if item.get(k):
             print(f"{k:>12}: {item[k]}")
+    # A switch's row in docs/switches.md may carry more than one picture (the state on each side of the
+    # switch); print every one, or a reader copying a path gets half of what the page shows.
+    pictures = item.get("screenshots") or ([item["screenshot"]] if item.get("screenshot") else [])
+    for picture in pictures:
+        print(f"{'screenshot':>12}: {picture}")
     if item["kind"] == "add-on":
         how = item["script"] or "the steps in addons/README.md"
-        print(f"{'install':>12}: TV_HOST=<tv ip> tools/venv/bin/python -I tools/manage.py install {item['id']}  (runs {how})")
+        if sys.platform == "win32" and item["script"]:
+            how += "; requires Bash"
+        label = "install"
+        instruction = f"TV_HOST=<tv ip> tools/venv/bin/python -I tools/manage.py install {item['id']}  (runs {how})"
     elif item["kind"] == "theme":
-        print(f"{'install':>12}: TV_HOST=<tv ip> tools/theme.sh themes/{item['id']}")
+        label = "install"
+        if sys.platform == "win32":
+            instruction = f"TV_HOST=<tv ip> tools/venv/bin/python -I tools/manage.py install {item['id']}"
+        else:
+            instruction = f"TV_HOST=<tv ip> tools/theme.sh themes/{item['id']}"
     else:
-        print(f"{'set':>12}: TV_HOST=<tv ip> tools/venv/bin/python -I tools/manage.py set {item['id']} <value> --theme <your theme folder>")
+        label = "set"
+        instruction = f"TV_HOST=<tv ip> tools/venv/bin/python -I tools/manage.py set {item['id']} <value> --theme <your theme folder>"
+    print(f"{label:>12}: {platform_usage(instruction)}")
     return 0
 
 
@@ -406,7 +773,11 @@ def cmd_install(name, extra):
     if not item or item["kind"] == "switch":
         sys.exit(f"no add-on or theme called {name}")
     if item["kind"] == "theme":
-        return run(["bash", str(TOOLS / "theme.sh"), str(ROOT / "themes" / item["id"])] + extra, ROOT)
+        if extra:
+            sys.stderr.write(f"install of a theme takes only its name, not {' '.join(extra)!r}. "
+                             "Nothing was pushed.\n")
+            return 2
+        return push_theme(theme_command(ROOT / "themes" / item["id"]))
     return install_addon(item, extra)
 
 
@@ -416,7 +787,7 @@ def cmd_remove(name):
         sys.exit(f"no add-on called {name}")
     out = tv(f"pm uninstall {item['package']}")
     print(out.strip())
-    return 0 if "Success" in out else 1
+    return 0 if pm_succeeded(out) else 1
 
 
 def cmd_set(key, value, theme_folder):
@@ -431,21 +802,49 @@ def cmd_set(key, value, theme_folder):
     if problem:
         sys.exit(problem)
     parsed = value_as(key, item, value)   # before the file is written or anything is pushed
+    command = theme_command(folder)
     data[key] = parsed
     f = folder / "config.json"
+    replaced = False
     try:
+        # own_folder_problem() above refuses a missing folder; an existing empty one is valid.
         folder.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        # Resolve the file as well as its folder: keep an owner's config.json symlink intact.
+        try:
+            target = f.resolve(strict=True)
+        except FileNotFoundError:
+            # An empty folder or a dangling link may start a config, but a link loop must be refused.
+            target = f.resolve()
+        except RuntimeError as e:
+            # Older pathlib versions use RuntimeError for a symlink loop; report the same write refusal.
+            raise OSError(str(e)) from e
+        if target.exists():
+            with target.open("r+b"):
+                pass   # keep refusing a read-only file, even when its folder permits replacement
+        with tempfile.TemporaryDirectory(prefix=".manage-config-", dir=target.parent) as staging:
+            pending = Path(staging) / target.name
+            pending.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            if target.exists():
+                shutil.copymode(target, pending)
+            os.replace(pending, target)
+            replaced = True
     except OSError as e:
-        # A folder that is read-only, a path with a file in the middle of it, a full disk: the key is not
-        # written and the theme on the TV is untouched, so say which file and why rather than a traceback.
-        sys.exit(f"cannot write {f}: {reason(e)}. Nothing was pushed.")
+        if not replaced:
+            # Until replace succeeds, a failed write leaves the owner's previous config intact.
+            sys.exit(f"cannot write {f}: {reason(e)}. Nothing was pushed.")
+        # The local edit is already saved: staging cleanup must not turn that into a write failure.
+        sys.stderr.write(f"Saved {f} locally, but staging cleanup failed: {reason(e)}. "
+                         f"The temporary folder may remain at {staging}. Continuing with the theme push.\n")
     print(f"{key} = {json.dumps(parsed)} in {f}")
-    return run(["bash", str(TOOLS / "theme.sh"), str(folder)], ROOT)
+    code = push_theme(command)
+    if code:
+        sys.stderr.write(f"Saved {f} locally, but the theme push failed (exit {code}). "
+                         "The TV may be only partly updated; the local edit was kept.\n")
+    return code
 
 
 SET_USAGE = ("set takes a switch, its value and --theme <your theme folder>, e.g. "
-             "set hidden_apps '[\"a\", \"b\"]' --theme ~/my-theme")
+             "set hidden_apps '[\"a\", \"b\"]' --theme my-theme")
 
 
 class Usage(Exception):
@@ -535,7 +934,7 @@ def set_args(args):
 
 def main(argv):
     if not argv or argv[0] in ("-h", "--help", "help"):
-        print(__doc__)
+        print(platform_usage(__doc__))
         return 0
     c, args = argv[0], argv[1:]
     if c == "set":
@@ -546,7 +945,7 @@ def main(argv):
             return 2
         return cmd_set(key, value, theme)
     if c not in WORDS:
-        print(__doc__)
+        print(platform_usage(__doc__))
         return 2
     try:
         args = own_words(c, args)

@@ -164,6 +164,34 @@ class CompareTest(unittest.TestCase):
         self.assertIn(f"{out}: written", text)
         self.assertTrue(os.path.isfile(out) and os.path.isfile(diff))
 
+    def test_positive_scales_keep_each_pair_dimension_at_least_one_pixel(self):
+        cases = (((200, 100), "0.001", (32, 61)),
+                 ((1, 1), None, (32, 61)),
+                 ((1, 8), None, (32, 64)),
+                 ((8, 1), None, (38, 61)),
+                 ((201, 101), None, (230, 110)))
+        for size, scale, expected in cases:
+            for different in (False, True):
+                with self.subTest(size=size, scale=scale, different=different):
+                    before = self.Image.new("RGB", size, "black")
+                    after = before.copy()
+                    if different:
+                        after.putpixel((0, 0), (255, 0, 0))
+                    a, b, out, diff = [os.path.join(self.tmp.name, name) for name in
+                                       ("a.png", "b.png", "pair.png", "diff.png")]
+                    before.save(a)
+                    after.save(b)
+                    args = [a, b, "--out", out, "--diff", diff]
+                    if scale is not None:
+                        args += ["--scale", scale]
+                    code, _ = self.run_tool(args)
+                    self.assertEqual(code, int(different))
+                    with self.Image.open(out) as pair:
+                        self.assertEqual(pair.size, expected)
+                    with self.Image.open(diff) as mask:
+                        self.assertEqual(mask.size, size)
+                        self.assertEqual(mask.getbbox() is not None, different)
+
     def test_output_control_distinct_files_can_be_created_or_overwritten(self):
         for different in (False, True):
             for existing in (False, True):
@@ -309,6 +337,38 @@ class OutputPathTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn(f"--out {out} has no extension", stderr)
         self.assertIn(f"name it {out}.png", stderr)
+
+    def test_an_empty_out_is_refused_rather_than_read_as_no_pair(self):
+        """`--out "$OUT"` with OUT unset asked for a pair: it used to compare and write none, with 0."""
+        code, stdout, stderr = self.run_tool(["before.png", "after.png", "--out", ""])
+        self.assertEqual(code, 2, "an empty --out must not read as 'no pair was asked for'")
+        self.assertEqual(stdout, "")
+        self.assertIn("--out was given as '', an empty name", stderr)
+        self.assertIn("--out shots/before-after.png", stderr)
+        self.assertIn("that variable was empty", stderr)
+        self.assertIn("Nothing was read or written", stderr)
+        self.assertNotIn("identical", stderr)
+        self.assertNotIn("Traceback", stderr)
+
+    def test_an_empty_diff_is_refused_the_same_way(self):
+        code, stdout, stderr = self.run_tool(["before.png", "after.png", "--diff", ""])
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("--diff was given as '', an empty name", stderr)
+        self.assertIn("Nothing was read or written", stderr)
+
+    def test_a_blank_out_is_refused_too(self):
+        # `--out "$SPACE"` reads as no name at all once the shell has split it away.
+        code, _, stderr = self.run_tool(["before.png", "after.png", "--out", "   "])
+        self.assertEqual(code, 2)
+        self.assertIn("--out was given as '   ', an empty name", stderr)
+
+    def test_the_option_left_out_is_still_no_pair(self):
+        """Only an empty value is refused: leaving --out or --diff out is how a run writes neither."""
+        self.assertIsNone(screendiff.output_path("--out", None))
+        self.assertIsNone(screendiff.output_path("--diff", None))
+        self.assertEqual(screendiff.output_path("--out", str(self.dir / "pair.png")),
+                         self.dir / "pair.png")
 
     def test_the_paths_are_judged_before_the_screenshots_are_opened(self):
         # Neither argument exists, so anything that opened them would say so first.

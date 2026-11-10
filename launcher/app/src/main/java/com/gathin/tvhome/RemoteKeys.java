@@ -34,7 +34,7 @@ import java.util.regex.Pattern;
  * so both may call handle() for one event, and it answers each press once.
  * A target of "input:<input id>" switches to that TV input (an HDMI port) instead of opening an app, a target
  * of "inputs" opens the input switcher, for a remote whose source button sends a key Android does not map,
- * one of the action words (back, home, recents, mute, sleep, screensaver, settings, wifi) does that action, and
+ * one of the action words (back, home, recents, mute, sleep, screensaver, settings, wifi, library) does that action, and
  * "package/.Activity" opens that activity rather than the app's launcher entry (an add-on's quick bar, say).
  */
 final class RemoteKeys {
@@ -179,6 +179,14 @@ final class RemoteKeys {
         return (slash < 0 ? target : target.substring(0, slash)).equals(front);
     }
 
+    /** The app in front, from HomeKeyService's window changes while app_keys has "front:" entries; "" otherwise. */
+    static String frontPackage = "";
+
+    /** A tap's target for both helpers: its "front:" entry while the button's own app is in front, else the usual one. */
+    static String tap(String target, String alt) {
+        return alt != null && inFront(target, frontPackage) ? alt : target;
+    }
+
     /** Created on first use: building a Handler while the class loads breaks the JVM tests. */
     private static Presses presses;
 
@@ -303,6 +311,11 @@ final class RemoteKeys {
      */
     static final int XIAOMI_SHORT_MENU_FLAGS = 0x7531;
 
+    /** Channel Up or Down, for home_ignore_channel_keys. */
+    static boolean isChannelKey(int keyCode) {
+        return keyCode == KeyEvent.KEYCODE_CHANNEL_UP || keyCode == KeyEvent.KEYCODE_CHANNEL_DOWN;
+    }
+
     /** True for the UP that ends a Menu press: not cancelled, or cancelled only as Xiaomi's injected short press is. */
     static boolean menuReleased(int action, int flags) {
         if (action != KeyEvent.ACTION_UP) return false;
@@ -343,7 +356,7 @@ final class RemoteKeys {
     static boolean isAction(String target) {
         switch (target) {
             case "back": case "home": case "recents": case "mute": case "sleep":
-            case "screensaver": case "settings": case "wifi": case "ignore":
+            case "screensaver": case "settings": case "wifi": case "library": case "ignore":
                 return true;
             default:
                 return false;
@@ -355,7 +368,11 @@ final class RemoteKeys {
         if (!isAction(target)) return false;
         int global = globalAction(target, Build.VERSION.SDK_INT);
         if (global != 0) {
-            if (ctx instanceof AccessibilityService) ((AccessibilityService) ctx).performGlobalAction(global);
+            // Home's own fallback path (vendor keys only the focused window gets) has no global actions: a bound helper
+            // performs them, so back, home, recents and sleep mapped to such a key are not swallowed.
+            AccessibilityService service = ctx instanceof AccessibilityService ? (AccessibilityService) ctx
+                    : HomeKeyService.running != null ? HomeKeyService.running : InputKeyService.running;
+            if (service != null) service.performGlobalAction(global);
             return true;
         }
         switch (target) {
@@ -378,6 +395,10 @@ final class RemoteKeys {
                 break;
             case "wifi":
                 start(ctx, SystemSettings.intent(ctx, Settings.ACTION_WIFI_SETTINGS));
+                break;
+            case "library":
+                // Home with the App library open on top; Home does nothing when app_library is off.
+                start(ctx, new Intent(ctx, MainActivity.class).setAction(MainActivity.ACTION_APP_LIBRARY));
                 break;
             default:
                 break;   // "ignore", or "sleep" below Android 9: consumed, nothing to do
@@ -430,9 +451,19 @@ final class RemoteKeys {
                     .setDataAndType(TvContract.buildChannelUriForPassthroughInput(inputId),
                             "vnd.android.cursor.item/channel")
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            // Aimed at the Live TV app first, as the Inputs menu does: an app that also claims the channel URI
+            // (the Fluffy file manager on a TCL G03) turned the press into a chooser.
+            String liveTv = Config.load(ctx).liveTvPackage;
+            if (liveTv != null && !liveTv.isEmpty()) {
+                try {
+                    ctx.startActivity(new Intent(view).setPackage(liveTv));
+                    return;
+                } catch (ActivityNotFoundException | SecurityException ignored) {
+                }
+            }
             try {
                 ctx.startActivity(view);
-            } catch (ActivityNotFoundException ignored) {
+            } catch (ActivityNotFoundException | SecurityException ignored) {
             }
             return;
         }
@@ -449,7 +480,7 @@ final class RemoteKeys {
         if (open == null) return;
         try {
             ctx.startActivity(open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-        } catch (ActivityNotFoundException ignored) {
+        } catch (ActivityNotFoundException | SecurityException ignored) {
         }
     }
 }
